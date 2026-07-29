@@ -1,8 +1,8 @@
-# Asgard 🎬
+# Asgard 
 
 **Asgard** is a native Android app for downloading YouTube videos and audio directly to your device — no server, no API key, no ads. It uses [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) to resolve stream URLs and Android's own `DownloadManager` to handle the actual transfer, wrapped in a small dark-themed Jetpack Compose UI.
 
-> "YGGDRASIL DOWNLOADER" — because it pulls video down from the branches of YouTube. 🌳
+> "YGGDRASIL DOWNLOADER" — because it pulls video down from the branches of YouTube. 
 
 ## Features
 
