@@ -51,15 +51,24 @@ class DownloadService : Service() {
             }
         }
         
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun createNotification(activeCount: Int): Notification {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Asgard Downloader")
             .setContentText("Processing $activeCount active download(s)...")
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setOngoing(true)
+            .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }

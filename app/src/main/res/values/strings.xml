@@ -1,3 +1,24 @@
 <resources>
     <string name="app_name">Asgard</string>
+    <string name="yt_downloader">YT Downloader</string>
+    <string name="youtube_url">YouTube URL</string>
+    <string name="add_to_queue">ADD TO QUEUE</string>
+    <string name="download_now">DOWNLOAD NOW</string>
+    <string name="downloading">DOWNLOADING...</string>
+    <string name="settings">SETTINGS</string>
+    <string name="download_location">DOWNLOAD LOCATION</string>
+    <string name="change_folder">CHANGE FOLDER</string>
+    <string name="reset_to_default">RESET TO DEFAULT</string>
+    <string name="download_queue">DOWNLOAD QUEUE</string>
+    <string name="items">%1$d ITEMS</string>
+    <string name="queue_empty">Queue is empty</string>
+    <string name="back">Back</string>
+    <string name="remove">Remove</string>
+    <string name="close">Close</string>
+    <string name="mp3">MP3</string>
+    <string name="mp4">MP4</string>
+    <string name="extracting">Extracting...</string>
+    <string name="extracting_playlist">Extracting Playlist...</string>
+    <string name="wifi_only">Wi-Fi Only</string>
+    <string name="wifi_only_desc">Only download when connected to Wi-Fi</string>
 </resources>

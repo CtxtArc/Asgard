@@ -20,8 +20,22 @@ import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
 import java.util.UUID
 
+@Serializable
+data class StreamRepresentation(
+    val content: String,
+    val format: String,
+    val quality: String,
+    val isVideo: Boolean
+)
+
+@Serializable
 data class DownloadTask(
     val id: String = UUID.randomUUID().toString(),
     val url: String,
@@ -32,21 +46,74 @@ data class DownloadTask(
     val progress: Float = 0f,
     val downloadId: Long? = null,
     val parentFolder: String? = null,
-    val isPlaylist: Boolean = false
+    val isPlaylist: Boolean = false,
+    val thumbnailUrl: String? = null,
+    val duration: Long = 0,
+    val uploader: String? = null,
+    val availableStreams: List<StreamRepresentation> = emptyList(),
+    val selectedStreamIndex: Int? = null,
+    val isHistory: Boolean = false,
+    val dateAdded: Long = System.currentTimeMillis()
 )
 
 class DownloaderViewModel : ViewModel() {
     private val _downloadQueue = MutableStateFlow<List<DownloadTask>>(emptyList())
     val downloadQueue: StateFlow<List<DownloadTask>> = _downloadQueue
 
+    private val _previewTask = MutableStateFlow<DownloadTask?>(null)
+    val previewTask: StateFlow<DownloadTask?> = _previewTask
+
     private val _downloadFolder = MutableStateFlow<String?>(null)
     val downloadFolder: StateFlow<String?> = _downloadFolder
 
+    private val _wifiOnly = MutableStateFlow(false)
+    val wifiOnly: StateFlow<Boolean> = _wifiOnly
+
     private var isProcessingQueue = false
+    private var queueFile: File? = null
+    private var previewJob: Job? = null
 
     fun init(context: Context) {
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
         _downloadFolder.value = prefs.getString("download_folder", null)
+        _wifiOnly.value = prefs.getBoolean("wifi_only", false)
+        
+        queueFile = File(context.filesDir, "download_queue.json")
+        loadQueue()
+        
+        processQueue(context)
+    }
+
+    private fun loadQueue() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (queueFile?.exists() == true) {
+                    val json = queueFile?.readText() ?: return@launch
+                    val queue = Json.decodeFromString<List<DownloadTask>>(json)
+                    val cleanedQueue = queue.map { 
+                        if (it.status == "Downloading..." || it.status == "Extracting...") {
+                            it.copy(status = "Pending", progress = 0f, downloadId = null)
+                        } else {
+                            it
+                        }
+                    }
+                    _downloadQueue.value = cleanedQueue
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun saveQueue() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val json = Json.encodeToString(_downloadQueue.value)
+                queueFile?.writeText(json)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     fun setDownloadFolder(context: Context, uri: String?) {
@@ -55,37 +122,128 @@ class DownloaderViewModel : ViewModel() {
         _downloadFolder.value = uri
     }
 
+    fun setWifiOnly(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("wifi_only", enabled).apply()
+        _wifiOnly.value = enabled
+    }
+
+    fun fetchPreview(url: String, isMp3: Boolean) {
+        previewJob?.cancel()
+        _previewTask.value = null // Clear old preview while loading new one
+        if (url.isBlank() || url.lines().size > 1) {
+            return
+        }
+
+        previewJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val service = try { NewPipe.getServiceByUrl(url) } catch (e: Exception) { ServiceList.YouTube }
+                val linkType = try { service.getLinkTypeByUrl(url) } catch (e: Exception) { StreamingService.LinkType.STREAM }
+                
+                if (linkType == StreamingService.LinkType.PLAYLIST) {
+                    _previewTask.value = DownloadTask(url = url, isMp3 = isMp3, isPlaylist = true, status = "Playlist Info Ready")
+                    return@launch
+                }
+
+                val streamInfo = StreamInfo.getInfo(service, url)
+                val audioStreams = streamInfo.audioStreams.map { 
+                    StreamRepresentation(it.content ?: "", it.format?.suffix ?: "audio", "${it.bitrate / 1000}kbps", false)
+                }
+                val videoStreams = streamInfo.videoStreams.map { 
+                    StreamRepresentation(it.content ?: "", it.format?.suffix ?: "video", it.resolution ?: "unknown", true)
+                }
+                
+                val allStreams = if (isMp3) audioStreams else videoStreams + audioStreams
+
+                _previewTask.value = DownloadTask(
+                    url = url,
+                    isMp3 = isMp3,
+                    title = streamInfo.name,
+                    thumbnailUrl = streamInfo.thumbnails.firstOrNull()?.url,
+                    uploader = streamInfo.uploaderName,
+                    availableStreams = allStreams,
+                    status = "Preview Ready"
+                )
+            } catch (e: Exception) {
+                _previewTask.value = null
+            }
+        }
+    }
+
+    fun clearPreview() {
+        previewJob?.cancel()
+        _previewTask.value = null
+    }
+
     fun addToQueue(context: Context, url: String, isMp3: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
-            val service = ServiceList.YouTube
-            val linkType = try { service.getLinkTypeByUrl(url) } catch (e: Exception) { StreamingService.LinkType.STREAM }
-            
-            val isPlaylist = linkType == StreamingService.LinkType.PLAYLIST
-            val newTask = DownloadTask(
-                url = url, 
-                isMp3 = isMp3, 
-                isPlaylist = isPlaylist,
-                status = if (isPlaylist) "Playlist Pending" else "Pending"
-            )
-            
-            _downloadQueue.value = _downloadQueue.value + newTask
-            
-            withContext(Dispatchers.Main) {
-                // Start foreground service
-                val intent = Intent(context, DownloadService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
+            val preview = _previewTask.value
+            if (preview != null && preview.url == url && preview.isMp3 == isMp3) {
+                // Use the preview task directly if it matches
+                _downloadQueue.value = _downloadQueue.value + preview.copy(id = UUID.randomUUID().toString(), status = if (preview.isPlaylist) "Playlist Pending" else "Pending")
+                _previewTask.value = null
+            } else {
+                val urls = url.split("\n").map { it.trim() }.filter { it.isNotBlank() }
+                val newTasks = urls.map { singleUrl ->
+                    val service = try { NewPipe.getServiceByUrl(singleUrl) } catch (e: Exception) { ServiceList.YouTube }
+                    val linkType = try { service.getLinkTypeByUrl(singleUrl) } catch (e: Exception) { StreamingService.LinkType.STREAM }
+                    
+                    val isPlaylist = linkType == StreamingService.LinkType.PLAYLIST
+                    DownloadTask(
+                        url = singleUrl, 
+                        isMp3 = isMp3, 
+                        isPlaylist = isPlaylist,
+                        status = if (isPlaylist) "Playlist Pending" else "Pending"
+                    )
                 }
+                _downloadQueue.value = _downloadQueue.value + newTasks
             }
-
+            saveQueue()
+            startBackgroundService(context)
             processQueue(context)
         }
     }
 
-    fun removeTask(id: String) {
+    fun retryTask(context: Context, id: String) {
+        updateTask(id) { it.copy(status = "Pending", progress = 0f, downloadId = null, selectedStreamIndex = null, availableStreams = emptyList()) }
+        saveQueue()
+        startBackgroundService(context)
+        processQueue(context)
+    }
+
+    private fun startBackgroundService(context: Context) {
+        viewModelScope.launch(Dispatchers.Main) {
+            val intent = Intent(context, DownloadService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+    }
+
+    fun removeTask(context: Context, id: String) {
+        val task = _downloadQueue.value.find { it.id == id }
+        task?.downloadId?.let { downloadId ->
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            downloadManager.remove(downloadId)
+        }
         _downloadQueue.value = _downloadQueue.value.filter { it.id != id }
+        saveQueue()
+    }
+    
+    fun clearHistory() {
+        _downloadQueue.value = _downloadQueue.value.filter { !it.isHistory }
+        saveQueue()
+    }
+
+    fun selectStream(id: String, index: Int) {
+        updateTask(id) { it.copy(selectedStreamIndex = index, status = "Pending") }
+        saveQueue()
+    }
+
+    fun selectPreviewStream(index: Int) {
+        _previewTask.value = _previewTask.value?.copy(selectedStreamIndex = index)
     }
 
     private fun processQueue(context: Context) {
@@ -94,62 +252,119 @@ class DownloaderViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             isProcessingQueue = true
             while (true) {
-                val nextTask = _downloadQueue.value.firstOrNull { it.status == "Pending" || it.status == "Playlist Pending" } ?: break
+                val nextTask = _downloadQueue.value.firstOrNull { 
+                    (it.status == "Pending" || it.status == "Playlist Pending") && !it.isHistory 
+                } ?: break
                 
                 if (nextTask.isPlaylist) {
                     expandPlaylist(context, nextTask)
+                    saveQueue()
                     continue
                 }
 
-                updateTaskStatus(nextTask.id, "Extracting...")
-                
-                try {
-                    val service = ServiceList.YouTube
-                    val streamInfo = StreamInfo.getInfo(service, nextTask.url)
-
-                    val stream = if (nextTask.isMp3) {
-                        streamInfo.audioStreams.maxByOrNull { it.bitrate }
-                    } else {
-                        streamInfo.videoStreams.filter { !it.isVideoOnly }.maxByOrNull { it.height }
-                            ?: streamInfo.videoStreams.maxByOrNull { it.height }
-                    }
-
-                    if (stream != null && stream.content != null) {
-                        val extension = if (nextTask.isMp3) "mp3" else "mp4"
-                        val fileName = "${streamInfo.name.replace("[\\\\/:*?\"<>|]".toRegex(), "_")}.$extension"
+                // If availableStreams is empty, we need to extract metadata first
+                if (nextTask.availableStreams.isEmpty()) {
+                    updateTaskStatus(nextTask.id, "Extracting...")
+                    saveQueue()
+                    
+                    try {
+                        val service = try { NewPipe.getServiceByUrl(nextTask.url) } catch (e: Exception) { ServiceList.YouTube }
+                        val streamInfo = StreamInfo.getInfo(service, nextTask.url)
                         
-                        val downloadId = startDownload(context, stream.content!!, streamInfo.name, fileName)
+                        val audioStreams = streamInfo.audioStreams.map { 
+                            StreamRepresentation(it.content ?: "", it.format?.suffix ?: "audio", "${it.bitrate / 1000}kbps", false)
+                        }
+                        val videoStreams = streamInfo.videoStreams.map { 
+                            StreamRepresentation(it.content ?: "", it.format?.suffix ?: "video", it.resolution ?: "unknown", true)
+                        }
                         
+                        val allStreams = if (nextTask.isMp3) audioStreams else videoStreams + audioStreams
+
                         updateTask(nextTask.id) { 
                             it.copy(
                                 title = streamInfo.name,
+                                thumbnailUrl = streamInfo.thumbnails.firstOrNull()?.url,
+                                duration = streamInfo.duration,
+                                uploader = streamInfo.uploaderName,
+                                availableStreams = allStreams,
+                                status = "Pending" // Keep pending, we'll pick best in next loop or wait if user wants to change
+                            )
+                        }
+                        saveQueue()
+                    } catch (e: Exception) {
+                        updateTaskStatus(nextTask.id, "Error: ${e.localizedMessage}")
+                        saveQueue()
+                    }
+                    continue
+                }
+
+                updateTaskStatus(nextTask.id, "Downloading...")
+                saveQueue()
+                
+                try {
+                    val stream = if (nextTask.selectedStreamIndex != null) {
+                        nextTask.availableStreams.getOrNull(nextTask.selectedStreamIndex)
+                    } else {
+                        // PICK DEFAULT: Best quality
+                        if (nextTask.isMp3) {
+                            // Already filtered or just pick first
+                            nextTask.availableStreams.firstOrNull()
+                        } else {
+                            // Pick best video
+                            nextTask.availableStreams.filter { it.isVideo }.firstOrNull() 
+                                ?: nextTask.availableStreams.firstOrNull()
+                        }
+                    }
+
+                    if (stream != null) {
+                        val extension = if (nextTask.isMp3) "mp3" else "mp4"
+                        val fileName = sanitizeFileName("${nextTask.title}.$extension")
+                        
+                        val downloadId = startDownload(context, stream.content, nextTask.title, fileName)
+                        
+                        updateTask(nextTask.id) { 
+                            it.copy(
                                 fileName = fileName,
-                                status = "Downloading...",
                                 downloadId = downloadId
                             )
                         }
+                        saveQueue()
                         
-                        // Launch monitoring for this specific task
                         launch { monitorDownload(context, nextTask.id, downloadId, fileName, nextTask.isMp3) }
                     } else {
-                        updateTaskStatus(nextTask.id, "Error: No stream found")
+                        updateTaskStatus(nextTask.id, "Error: No stream selected")
+                        saveQueue()
                     }
                 } catch (e: Exception) {
                     updateTaskStatus(nextTask.id, "Error: ${e.localizedMessage}")
-                    e.printStackTrace()
+                    saveQueue()
                 }
-                delay(1000) // Small delay between extractions
+                delay(1000)
             }
             isProcessingQueue = false
         }
     }
 
-    private suspend fun expandPlaylist(context: Context, playlistTask: DownloadTask) {
+    private fun sanitizeFileName(name: String): String {
+        var sanitized = name.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+        sanitized = sanitized.trim()
+        while (sanitized.endsWith(".") || sanitized.endsWith(" ")) {
+            sanitized = sanitized.substring(0, sanitized.length - 1)
+        }
+        if (sanitized.length > 127) {
+            val ext = sanitized.substringAfterLast(".", "")
+            val base = sanitized.substringBeforeLast(".")
+            sanitized = base.take(120) + (if (ext.isNotEmpty()) ".$ext" else "")
+        }
+        return sanitized.ifEmpty { "download_${System.currentTimeMillis()}" }
+    }
+
+    private fun expandPlaylist(context: Context, playlistTask: DownloadTask) {
         updateTaskStatus(playlistTask.id, "Extracting Playlist...")
         try {
-            val service = ServiceList.YouTube
+            val service = try { NewPipe.getServiceByUrl(playlistTask.url) } catch (e: Exception) { ServiceList.YouTube }
             val playlistInfo = PlaylistInfo.getInfo(service, playlistTask.url)
-            val playlistTitle = playlistInfo.name.replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+            val playlistTitle = sanitizeFileName(playlistInfo.name)
             
             val newTasks = playlistInfo.relatedItems.map { item ->
                 DownloadTask(
@@ -157,16 +372,18 @@ class DownloaderViewModel : ViewModel() {
                     isMp3 = playlistTask.isMp3,
                     title = item.name,
                     status = "Pending",
-                    parentFolder = playlistTitle
+                    parentFolder = playlistTitle,
+                    thumbnailUrl = item.thumbnails.firstOrNull()?.url,
+                    uploader = item.uploaderName
                 )
             }
             
-            // Remove the playlist placeholder and add individual tasks
             _downloadQueue.value = _downloadQueue.value.filter { it.id != playlistTask.id } + newTasks
+            saveQueue()
             
         } catch (e: Exception) {
             updateTaskStatus(playlistTask.id, "Error: ${e.localizedMessage}")
-            e.printStackTrace()
+            saveQueue()
         }
     }
 
@@ -184,11 +401,16 @@ class DownloaderViewModel : ViewModel() {
         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle(title)
-            .setDescription("Downloading from YouTube")
+            .setDescription("Downloading from Asgard")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(true)
+            .setAllowedOverMetered(!_wifiOnly.value)
+            .setAllowedOverRoaming(!_wifiOnly.value)
+            
+        if (_wifiOnly.value) {
+            request.setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
+        }
+        
         return downloadManager.enqueue(request)
     }
 
@@ -219,10 +441,12 @@ class DownloaderViewModel : ViewModel() {
                     DownloadManager.STATUS_SUCCESSFUL -> {
                         downloading = false
                         handleDownloadFinished(context, taskId, downloadId, fileName, isMp3)
+                        saveQueue()
                     }
                     DownloadManager.STATUS_FAILED -> {
                         downloading = false
                         updateTaskStatus(taskId, "Error: Download failed")
+                        saveQueue()
                     }
                 }
                 cursor.close()
@@ -249,10 +473,9 @@ class DownloaderViewModel : ViewModel() {
                 val baseFolderUri = Uri.parse(baseFolderUriString)
                 var targetFolder = DocumentFile.fromTreeUri(context, baseFolderUri)
                 
-                // Handle sub-folder for playlist
                 if (task.parentFolder != null) {
-                    val subFolder = targetFolder?.findFile(task.parentFolder) 
-                        ?: targetFolder?.createDirectory(task.parentFolder)
+                    val subFolder = targetFolder?.findFile(task.parentFolder!!) 
+                        ?: targetFolder?.createDirectory(task.parentFolder!!)
                     targetFolder = subFolder
                 }
                 
@@ -260,21 +483,21 @@ class DownloaderViewModel : ViewModel() {
                 val newFile = targetFolder?.createFile(mimeType, fileName)
                 
                 newFile?.uri?.let { destUri ->
-                    context.contentResolver.openInputStream(downloadedFileUri)?.use { input ->
+                    context.contentResolver.openInputStream(downloadedFileUri!!)?.use { input ->
                         context.contentResolver.openOutputStream(destUri)?.use { output ->
                             input.copyTo(output)
                         }
                     }
-                    context.contentResolver.delete(downloadedFileUri, null, null)
-                    updateTask(taskId) { it.copy(status = "Completed & Moved", progress = 1f) }
+                    context.contentResolver.delete(downloadedFileUri!!, null, null)
+                    updateTask(taskId) { it.copy(status = "Completed & Moved", progress = 1f, isHistory = true) }
                 } ?: run {
-                    updateTask(taskId) { it.copy(status = "Completed (Move Failed)", progress = 1f) }
+                    updateTask(taskId) { it.copy(status = "Completed (Move Failed)", progress = 1f, isHistory = true) }
                 }
             } catch (e: Exception) {
-                updateTask(taskId) { it.copy(status = "Completed (Error: ${e.localizedMessage})", progress = 1f) }
+                updateTask(taskId) { it.copy(status = "Completed (Error: ${e.localizedMessage})", progress = 1f, isHistory = true) }
             }
         } else {
-            updateTask(taskId) { it.copy(status = "Completed", progress = 1f) }
+            updateTask(taskId) { it.copy(status = "Completed", progress = 1f, isHistory = true) }
         }
     }
 }
