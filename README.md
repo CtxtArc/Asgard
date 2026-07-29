@@ -1,17 +1,18 @@
 # Asgard 
 
-**Asgard** is a native Android app for downloading YouTube videos and audio directly to your device — no server, no API key, no ads. It uses [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) to resolve stream URLs and Android's own `DownloadManager` to handle the actual transfer, wrapped in a small dark-themed Jetpack Compose UI.
+**Asgard** is a native Android app for downloading YouTube videos and audio directly to your device — no server, no API key, no ads. It uses [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) to resolve stream URLs and Android's own `DownloadManager` to handle the actual transfer, wrapped in a small system-themed Jetpack Compose UI.
 
-> "YGGDRASIL DOWNLOADER" — because it pulls video down from the branches of YouTube. 
+> "can be coupled with YGGDRASIL music player"
 
 ## Features
 
 - **Paste a link or share into the app** — Asgard registers as a share target, so you can hit "Share" on a YouTube video/playlist from the YouTube app or a browser and send it straight to Asgard.
-- **MP4 or MP3** — download the best available video stream, or extract just the audio.
+- **MP4 or MP3** — download the best available video stream, or extract just the audio, select format and resolution or choose defaults.
 - **Playlist support** — pasting a playlist URL expands it into individual queued downloads, saved into a subfolder named after the playlist.
-- **Download queue** — add several links in a row; they're processed sequentially with live progress and status per item.
+- **Download queue** — add several links in a row, or one multiline; they're processed sequentially with live progress and status per item.
 - **Custom download folder** — pick any folder on-device (via the Storage Access Framework) instead of the default `Downloads` folder.
 - **Foreground service + notification** — downloads keep running and are visible in the notification shade while active.
+- **Wi-Fi only download** — enable wifi only download to not eat through your whole data. 
 
 ## How it works
 
@@ -67,6 +68,3 @@ Requires Android Studio (or the Gradle/JDK toolchain it bundles) with SDK 36 ins
 ## Legal note
 
 Asgard is a general-purpose downloading tool built on an open-source extraction library. Downloading copyrighted content without permission may violate YouTube's Terms of Service and/or local law. You're responsible for how you use this app.
-## License
-
-No license file is currently included in this repository — add one (MIT/GPL/etc.) before distributing or accepting contributions.
