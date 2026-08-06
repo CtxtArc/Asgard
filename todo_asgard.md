@@ -15,6 +15,8 @@ A running list of things that are missing, broken, or would be nice to add. Roug
 - [x] No retry button for failed items — added a Refresh button to failed queue items to retry extraction/download.
 - [x] `DownloadService` uses `START_NOT_STICKY`, so if the system kills the service mid-download it won't restart and the download silently stalls. (Changed to `START_STICKY`).
 - [x] **URL Clearing** — URL box now clears immediately after adding to queue.
+- [x] **Direct-to-Storage Downloads** — Bypassed DownloadManager for direct writes and fixed "Move Failed" issue.
+- [x] **Parallel Chunked Downloading** — Implemented high-speed multithreaded downloading with automatic retries.
 - [ ] No handling for age-restricted, region-locked, members-only, or livestream URLs — improved some error logging, but specific UX for these is still pending.
 - [x] Filename sanitization (`[\\/:*?"<>|]`) is minimal — improved with trimming, length capping, and removal of trailing dots/spaces.
 

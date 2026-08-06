@@ -12,8 +12,19 @@ import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.localization.Localization
 import java.io.IOException
 
+import java.util.concurrent.TimeUnit
+
 class AsgardApp : Application() {
     
+    val okHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+    }
+
     // Global ViewModel to persist queue across activity restarts
     val downloaderViewModel: DownloaderViewModel by lazy {
         DownloaderViewModel()
@@ -22,10 +33,6 @@ class AsgardApp : Application() {
     override fun onCreate() {
         super.onCreate()
         
-        val client = OkHttpClient.Builder()
-            .followRedirects(true)
-            .build()
-
         val downloader = object : Downloader() {
             @Throws(IOException::class, InterruptedException::class)
             override fun execute(request: Request): Response {
@@ -52,7 +59,7 @@ class AsgardApp : Application() {
                     }
                     .build()
 
-                val okHttpResponse = client.newCall(okHttpRequest).execute()
+                val okHttpResponse = okHttpClient.newCall(okHttpRequest).execute()
 
                 return Response(
                     okHttpResponse.code,
